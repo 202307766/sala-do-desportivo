@@ -4,7 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Sala AEFEUP</title>
-<link rel="icon" href="logo.png">
+<link rel="icon" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Sala AEFEUP">
 <meta name="theme-color" content="#ffffff">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&display=swap">
@@ -52,6 +54,11 @@ li:last-child{border-bottom:0}
 .t{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .none{color:var(--muted);border:0}
 .note{font-size:13px;color:var(--muted);margin:0;text-align:center}
+.alerts{border-top:1px solid var(--line);padding-top:18px;font-size:14px;color:var(--muted);display:flex;flex-direction:column;gap:8px}
+.alerts b{color:var(--fg);font-weight:600}
+.topic{display:flex;gap:8px;align-items:center}
+.topic code{flex:1;min-width:0;font:500 15px ui-monospace,Menlo,monospace;color:var(--fg);background:var(--red-soft);padding:8px 10px;border-radius:8px;overflow-wrap:anywhere;user-select:all}
+.topic button{font:600 14px var(--body);padding:8px 12px;border-radius:8px;border:1.5px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer}
 </style>
 </head>
 <body>
@@ -84,6 +91,12 @@ li:last-child{border-bottom:0}
   </section>
 
   <p class="note" id="note"></p>
+
+  <section class="alerts">
+    <b>Receber avisos no telemóvel</b>
+    <span>Instala a app gratuita ntfy (App Store ou Play Store), carrega em + e subscreve este canal. Recebes um aviso sempre que alguém chega à sala.</span>
+    <div class="topic"><code id="topic"></code><button type="button" id="copy">Copiar</button></div>
+  </section>
 </div>
 
 <script type="module">
@@ -105,9 +118,14 @@ const store = {
   set(k,v){ try { localStorage.setItem(k,v); } catch {} }
 };
 
-let myId = store.get("sala.id");
-if (!myId) { myId = (crypto.randomUUID?.() || String(Math.random()).slice(2)).replace(/-/g,""); store.set("sala.id", myId); }
+// Cada pessoa é identificada pelo nome: sem acentos, minúsculas, só letras e números.
+// "Lázaro" e "lazaro" são o mesmo perfil, em qualquer telemóvel.
+const keyFor = name => {
+  const slug = String(name).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 34);
+  return slug ? "pessoa" + slug : null;
+};
 let myName = store.get("sala.name") || "";
+let myId = keyFor(myName);
 let people = {};
 let save;
 
@@ -167,28 +185,59 @@ function render() {
 $("namebox").addEventListener("submit", e => {
   e.preventDefault();
   const v = $("nameinput").value.trim().slice(0, 30);
-  if (!v) return;
-  myName = v; store.set("sala.name", v);
-  if (people[myId]) save({ ...people[myId], name: v });
+  const k = keyFor(v);
+  if (!k) { $("note").textContent = "O nome tem de ter pelo menos uma letra ou número."; return; }
+  $("note").textContent = "";
+  const oldId = previousId; previousId = null;
+  myName = v; myId = k; store.set("sala.name", v);
+  if (oldId && oldId !== k && people[oldId]) {
+    const old = people[oldId];
+    save(oldId, null);
+    if (status(old) !== "out" && status(people[k]) === "out") save(k, { name: v, s: old.s, since: old.since });
+  }
   render();
 });
-$("rename").addEventListener("click", () => { $("nameinput").value = myName; myName = ""; render(); $("nameinput").focus(); });
+let previousId = null;
+$("rename").addEventListener("click", () => { $("nameinput").value = myName; previousId = myId; myName = ""; myId = null; render(); $("nameinput").focus(); });
 document.querySelectorAll(".opts button").forEach(b => b.addEventListener("click", () => {
-  save({ name: myName, s: b.dataset.s, since: Date.now() });
+  if (!myId) return;
+  const wasIn = status(people[myId]) === "in";
+  save(myId, { name: myName, s: b.dataset.s, since: Date.now() });
+  if (b.dataset.s === "in" && !wasIn) notify(`${myName} está na sala`);
 }));
+
+// ===== Avisos (ntfy) =====
+// Quem subscrever este canal na app ntfy recebe um aviso quando alguém marca "Estou lá".
+const NTFY_TOPIC = "sala-aefeup-67h5aptw";
+const SITE_URL = "https://202307766.github.io/sala-do-desportivo/";
+$("topic").textContent = NTFY_TOPIC;
+$("copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(NTFY_TOPIC); $("copy").textContent = "Copiado"; }
+  catch { getSelection().selectAllChildren($("topic")); }
+  setTimeout(() => { $("copy").textContent = "Copiar"; }, 2000);
+});
+function notify(message) {
+  if (!firebaseConfig.databaseURL) return; // não manda avisos em modo de demonstração
+  fetch("https://ntfy.sh/", {
+    method: "POST",
+    body: JSON.stringify({ topic: NTFY_TOPIC, title: "Sala AEFEUP", message, tags: ["red_circle"], click: SITE_URL })
+  }).catch(() => {});
+}
 
 const configured = !!firebaseConfig.databaseURL;
 if (configured) {
   try {
     const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js");
-    const { getDatabase, ref, onValue, set } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js");
+    const { getDatabase, ref, onValue, set, remove } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js");
     const cfg = Object.fromEntries(Object.entries(firebaseConfig).filter(([, v]) => v));
     const db = getDatabase(initializeApp(cfg));
-    save = async data => {
-      try { await set(ref(db, "sala/" + myId), data); $("note").textContent = ""; }
+    save = async (id, data) => {
+      try { await (data ? set(ref(db, "sala/" + id), data) : remove(ref(db, "sala/" + id))); $("note").textContent = ""; }
       catch { $("note").textContent = "Não deu para guardar. Verifica a internet e tenta outra vez."; }
     };
-    onValue(ref(db, "sala"), snap => { people = snap.val() || {}; render(); },
+    onValue(ref(db, "sala"), snap => { const all = snap.val() || {};
+      people = Object.fromEntries(Object.entries(all).filter(([id]) => id.startsWith("pessoa")));
+      render(); },
       () => { $("note").textContent = "Sem ligação à base de dados."; });
   } catch {
     $("note").textContent = "Não foi possível ligar. Recarrega a página.";
@@ -196,8 +245,8 @@ if (configured) {
 } else {
   // Modo de demonstração: dados só neste dispositivo.
   people = {};
-  const saved = store.get("sala.demo"); if (saved) try { people[myId] = JSON.parse(saved); } catch {}
-  save = data => { people[myId] = data; store.set("sala.demo", JSON.stringify(data)); render(); };
+  const saved = store.get("sala.demo"); if (saved && myId) try { const d = JSON.parse(saved); if (d) people[myId] = d; } catch {}
+  save = (id, data) => { if (data) people[id] = data; else delete people[id]; store.set("sala.demo", JSON.stringify(people[myId] || null)); render(); };
   $("note").textContent = "Modo de demonstração: ainda não está ligado ao Firebase.";
 }
 
