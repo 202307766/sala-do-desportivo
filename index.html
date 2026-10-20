@@ -93,7 +93,7 @@ li:last-child{border-bottom:0}
 const firebaseConfig = {
   apiKey: "",
   authDomain: "",
-  databaseURL: "",
+  databaseURL: "https://sala-do-desportivo-default-rtdb.europe-west1.firebasedatabase.app",
   projectId: "",
   appId: ""
 };
@@ -177,12 +177,13 @@ document.querySelectorAll(".opts button").forEach(b => b.addEventListener("click
   save({ name: myName, s: b.dataset.s, since: Date.now() });
 }));
 
-const configured = firebaseConfig.apiKey && firebaseConfig.databaseURL;
+const configured = !!firebaseConfig.databaseURL;
 if (configured) {
   try {
     const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js");
     const { getDatabase, ref, onValue, set } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js");
-    const db = getDatabase(initializeApp(firebaseConfig));
+    const cfg = Object.fromEntries(Object.entries(firebaseConfig).filter(([, v]) => v));
+    const db = getDatabase(initializeApp(cfg));
     save = async data => {
       try { await set(ref(db, "sala/" + myId), data); $("note").textContent = ""; }
       catch { $("note").textContent = "Não deu para guardar. Verifica a internet e tenta outra vez."; }
